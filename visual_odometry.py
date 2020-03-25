@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 from rotations import *
 from matplotlib import pyplot as plt
+
 STAGE_FIRST_FRAME = 0
 STAGE_SECOND_FRAME = 1
 STAGE_DEFAULT_FRAME = 2
@@ -22,8 +23,8 @@ def featureTracking(image_ref, image_cur, px_ref):
 
 def camera_matrices(R_old, R, t, K):
 	P_0 = np.zeros((3, 4))
-	tilt = 4.6
-	init_R = rotateZ(tilt)[0:3, 0:3]
+	tilt = 0
+	init_R = rotateX(tilt)[0:3, 0:3]
 	P_0[0:3, 0:3] = init_R
 	P_1 = np.zeros((3, 4))
 	P_1[0:3, 0:3] = R
@@ -75,6 +76,25 @@ class VisualOdometry:
 		z = float(ss[11])
 		self.trueX, self.trueY, self.trueZ = x, y, z
 		return np.sqrt((x - x_prev)*(x - x_prev) + (y - y_prev)*(y - y_prev) + (z - z_prev)*(z - z_prev))
+	def scale_dynamic(self, points, R):
+		y_mean2 = np.median(abs(points[:, 1]))
+		scale = 1.65 / y_mean2
+		print('current scale is :', self.scale)
+		print('scale is : ', scale)
+		alpha = 0.5
+		rot_trace = abs(np.trace(R.dot(self.cur_R) - self.cur_R))
+		if self.scale < 0.1:
+			self.scale = 0.4
+		elif rot_trace > 5e-3:
+			self.scale -= 0.03
+		elif (scale > 1.3 and rot_trace < 5e-3):
+			self.scale = (1 - alpha) * self.scale + 1.3 * alpha
+		if (scale >= self.scale):
+			if (rot_trace < 5e-3):
+				self.scale = (1 - alpha) * self.scale + alpha * min(self.scale + 0.2, scale)
+		else:
+			if (rot_trace < 5e-3):
+				self.scale = (1 - alpha) * self.scale + alpha * max(self.scale - 0.2, scale)
 
 	def processFirstFrame(self):
 		self.px_ref = self.detector.detect(self.new_frame)
@@ -95,32 +115,17 @@ class VisualOdometry:
 		absolute_scale = self.getAbsoluteScale(frame_id)
 
 
+
 		## Changes made from here ##
 		self.track_window(self.last_frame, self.new_frame)
 		P0, P1 = camera_matrices(self.cur_R, R, t, self.k)
 		points = cv2.triangulatePoints(P0, P1, self.px_planar_ref.T, self.px_planar_cur.T)
 		points = points.T
-		reproj_pix = np.zeros_like(points)
 		for i in range(len(points)):
-			reproj_pix[i,0:3] = -P1 @ points[i]
 			points[i] /= points[i,3]
-			print(points[i])
-		y_mean = np.mean(abs(points[:,1]))
-		scale = 1.65/y_mean
-		alpha = 0.5
-		offset = 0
-		if(abs(np.amax(abs(points[:,1]) - y_mean))) > 0.5 or y_mean < 1:
-			self.scale = self.scale
-		else:
-			self.scale = (1-alpha)*self.scale + alpha*scale + offset
-		print(absolute_scale)
-		print(self.scale)
-		print('')
-		#print(reproj_pix)
-		#print(self.px_planar_cur)
-
-		## TO HERE ##
-		
+		print(t)
+		self.scale_dynamic(points, R)
+		print('absolute scale is : ', absolute_scale)
 		if(absolute_scale > 0.1):
 			self.cur_t = self.cur_t + self.scale*self.cur_R.dot(t)
 			self.cur_R = R.dot(self.cur_R)
@@ -142,10 +147,11 @@ class VisualOdometry:
 
 	def track_window(self, im1, im2):
 		"""Made as part of EiT computer vision village project"""
-		FEATURE_PARAMS = dict(maxCorners=10,qualityLevel=0.001,minDistance=20,blockSize=7)
-		LK_PARAMS = dict(winSize=(21, 21), maxLevel = 3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+		FEATURE_PARAMS = dict(maxCorners=10, qualityLevel=0.0001, minDistance=20, blockSize=7)
+		LK_PARAMS = dict(winSize=(21, 21), maxLevel=3,
+						 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 
-		crop_x_lower, crop_x_upper = 250, 320
+		crop_x_lower, crop_x_upper = 280, 340
 		crop_y_lower, crop_y_upper = 520, 580
 		crop_img1 = im1[crop_x_lower:crop_x_upper, crop_y_lower:crop_y_upper]
 
