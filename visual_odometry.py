@@ -94,6 +94,8 @@ class VisualOdometry:
 		_, R, t, mask = cv2.recoverPose(E, self.px_cur, self.px_ref, focal=self.focal, pp = self.pp)
 		absolute_scale = self.getAbsoluteScale(frame_id)
 
+
+		## Changes made from here ##
 		self.track_window(self.last_frame, self.new_frame)
 		P0, P1 = camera_matrices(self.cur_R, R, t, self.k)
 		points = cv2.triangulatePoints(P0, P1, self.px_planar_ref.T, self.px_planar_cur.T)
@@ -117,6 +119,8 @@ class VisualOdometry:
 		#print(reproj_pix)
 		#print(self.px_planar_cur)
 
+		## TO HERE ##
+		
 		if(absolute_scale > 0.1):
 			self.cur_t = self.cur_t + self.scale*self.cur_R.dot(t)
 			self.cur_R = R.dot(self.cur_R)
