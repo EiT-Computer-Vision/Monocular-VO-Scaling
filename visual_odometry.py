@@ -1,8 +1,7 @@
 import numpy as np
 import cv2
 from rotations import *
-from matplotlib import pyplot as plt
-
+import matplotlib.pyplot as plt
 STAGE_FIRST_FRAME = 0
 STAGE_SECOND_FRAME = 1
 STAGE_DEFAULT_FRAME = 2
@@ -23,13 +22,23 @@ def featureTracking(image_ref, image_cur, px_ref):
 
 def camera_matrices(R_old, R, t, K):
 	P_0 = np.zeros((3, 4))
-	tilt = 0
-	init_R = rotateX(tilt)[0:3, 0:3]
-	P_0[0:3, 0:3] = init_R
+	P_0[0:3, 0:3] = R_old
 	P_1 = np.zeros((3, 4))
-	P_1[0:3, 0:3] = R
+	P_1[0:3, 0:3] = R @ R_old
 	P_1[:, 3] = np.squeeze(t)
 	return K @ P_0, K @ P_1
+
+
+def plot_3d(points):
+	fig = plt.figure()
+	ax = plt.axes(projection='3d')
+	ax.scatter3D(points[:,0], points[:, 1], points[:, 2])
+
+def print_points(points):
+	for i in points:
+		print(i)
+	print('\n')
+
 
 class PinholeCamera:
 	def __init__(self, width, height, fx, fy, cx, cy,
@@ -52,11 +61,13 @@ class VisualOdometry:
 		self.last_frame = None
 		self.cur_R = None
 		self.cur_t = None
+		self.cur_t_unscaled = None
 		self.px_ref = None
 		self.px_cur = None
 		self.px_planar_ref = None
 		self.px_planar_cur = None
 		self.scale = 1
+		self.error = []
 		self.focal = cam.fx
 		self.pp = (cam.cx, cam.cy)
 		self.k = np.array([[self.focal, 0, cam.cx], [0, self.focal, cam.cy], [0, 0, 1]])
@@ -76,25 +87,70 @@ class VisualOdometry:
 		z = float(ss[11])
 		self.trueX, self.trueY, self.trueZ = x, y, z
 		return np.sqrt((x - x_prev)*(x - x_prev) + (y - y_prev)*(y - y_prev) + (z - z_prev)*(z - z_prev))
+
+	def refine_points(self, F):
+		n = len(self.px_planar_ref)
+		p1, p2 = cv2.correctMatches(F,
+			np.reshape(self.px_planar_ref, (1, n, 2)), np.reshape(self.px_planar_cur, (1, n, 2)))
+
+		self.px_planar_ref, self.px_planar_cur = np.reshape(p1, (n,2)), np.reshape(p2, (n,2))
+
+
 	def scale_dynamic(self, points, R):
-		y_mean2 = np.median(abs(points[:, 1]))
-		scale = 1.65 / y_mean2
-		print('current scale is :', self.scale)
-		print('scale is : ', scale)
+		y_mean = np.mean(points[:, 1])
+		scale = -1.65 / y_mean
+		scale = abs(scale)
 		alpha = 0.5
 		rot_trace = abs(np.trace(R.dot(self.cur_R) - self.cur_R))
-		if self.scale < 0.1:
-			self.scale = 0.4
-		elif rot_trace > 5e-3:
+		if rot_trace > 5e-3 and self.scale > 0.4:
 			self.scale -= 0.03
-		elif (scale > 1.3 and rot_trace < 5e-3):
+
+		elif (scale > 2 and rot_trace < 5e-3):
 			self.scale = (1 - alpha) * self.scale + 1.3 * alpha
 		if (scale >= self.scale):
 			if (rot_trace < 5e-3):
-				self.scale = (1 - alpha) * self.scale + alpha * min(self.scale + 0.2, scale)
+					self.scale = (1 - alpha) * self.scale + alpha * min(self.scale + 0.1, scale)
 		else:
 			if (rot_trace < 5e-3):
-				self.scale = (1 - alpha) * self.scale + alpha * max(self.scale - 0.2, scale)
+				self.scale = (1 - alpha) * self.scale + alpha * max(self.scale - 0.1, scale)
+		self.scale = np.clip(self.scale, 0.1, 3)
+
+	def remove_outliers(self, R, t):
+		self.track_window(self.last_frame, self.new_frame)
+		P0, P1 = camera_matrices(self.cur_R, R, t, self.k)
+
+		points = cv2.triangulatePoints(P0, P1, self.px_planar_ref.T, self.px_planar_cur.T)
+		points = points.T
+
+
+		reprojection_points = np.zeros((len(points), 3))
+		homogenous_pts = np.zeros((len(points),4))
+		for i in range(len(points)):
+			homogenous_pts[i] = points[i]
+			homogenous_pts[i] /= homogenous_pts[i, 3]
+			reprojection_points[i] = -P1 @ points[i]
+		reproj_error = abs(self.px_planar_cur - reprojection_points[:,:2])
+
+		good_points = []
+		medi = np.median(homogenous_pts[:,1])
+		for i in range(len(reproj_error)):
+			if(np.mean(reproj_error[i]) < 100 and homogenous_pts[i,1] < 0 and abs(homogenous_pts[i,1] - medi) < 2*self.scale):
+				good_points.append(points[i])
+
+		if len(good_points) == 0:
+			index = np.argmin(np.mean(reproj_error, 0))
+			good_points.append(points[index])
+		count = 0
+		good_pts_ary = np.zeros_like(good_points)
+		for i in good_points:
+			good_pts_ary[count] = i
+			count += 1
+
+		if(len(good_points) == 0):
+			return []
+		for i in range(len(good_points)):
+			good_pts_ary[i] /= good_pts_ary[i, 3]
+		return good_pts_ary
 
 	def processFirstFrame(self):
 		self.px_ref = self.detector.detect(self.new_frame)
@@ -105,6 +161,7 @@ class VisualOdometry:
 		self.px_ref, self.px_cur = featureTracking(self.last_frame, self.new_frame, self.px_ref)
 		E, mask = cv2.findEssentialMat(self.px_cur, self.px_ref, focal=self.focal, pp=self.pp, method=cv2.RANSAC, prob=0.999, threshold=1.0)
 		_, self.cur_R, self.cur_t, mask = cv2.recoverPose(E, self.px_cur, self.px_ref, focal=self.focal, pp = self.pp)
+		self.cur_t_unscaled = self.cur_t
 		self.frame_stage = STAGE_DEFAULT_FRAME
 		self.px_ref = self.px_cur
 
@@ -115,20 +172,19 @@ class VisualOdometry:
 		absolute_scale = self.getAbsoluteScale(frame_id)
 
 
-
-		## Changes made from here ##
+		## Our functions ##
 		self.track_window(self.last_frame, self.new_frame)
-		P0, P1 = camera_matrices(self.cur_R, R, t, self.k)
-		points = cv2.triangulatePoints(P0, P1, self.px_planar_ref.T, self.px_planar_cur.T)
-		points = points.T
-		for i in range(len(points)):
-			points[i] /= points[i,3]
-		print(t)
+		F, mask = cv2.findFundamentalMat(self.px_cur, self.px_ref, cv2.RANSAC)
+		self.refine_points(F)
+		points = self.remove_outliers(R, t)
 		self.scale_dynamic(points, R)
-		print('absolute scale is : ', absolute_scale)
-		if(absolute_scale > 0.1):
-			self.cur_t = self.cur_t + self.scale*self.cur_R.dot(t)
+		self.error.append(absolute_scale - self.scale)
+		print(self.scale)
+		print(absolute_scale)
+		if(self.scale > 0.1):
+			self.cur_t = self.cur_t + (self.scale)*self.cur_R.dot(t)
 			self.cur_R = R.dot(self.cur_R)
+			self.cur_t_unscaled = self.cur_t_unscaled + self.cur_R.dot(t)
 		if(self.px_ref.shape[0] < kMinNumFeature):
 			self.px_cur = self.detector.detect(self.new_frame)
 			self.px_cur = np.array([x.pt for x in self.px_cur], dtype=np.float32)
@@ -145,34 +201,38 @@ class VisualOdometry:
 			self.processFirstFrame()
 		self.last_frame = self.new_frame
 
-	def track_window(self, im1, im2):
+	def track_window(self, im1, im2, x_lower = 275, x_upper = 360, y_lower = 450, y_upper = 780):
 		"""Made as part of EiT computer vision village project"""
-		FEATURE_PARAMS = dict(maxCorners=10, qualityLevel=0.0001, minDistance=20, blockSize=7)
+		FEATURE_PARAMS = dict(maxCorners=20, qualityLevel=0.005, minDistance=20, blockSize=7)
 		LK_PARAMS = dict(winSize=(21, 21), maxLevel=3,
 						 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
-
-		crop_x_lower, crop_x_upper = 280, 340
-		crop_y_lower, crop_y_upper = 520, 580
-		crop_img1 = im1[crop_x_lower:crop_x_upper, crop_y_lower:crop_y_upper]
-
+		crop_img1 = im2[x_lower:x_upper, y_lower:y_upper]
 		p0 = cv2.goodFeaturesToTrack(crop_img1, **FEATURE_PARAMS)
 		p0 = np.squeeze(p0)
 		for i in p0:
-			i[0] += crop_y_lower
-			i[1] += crop_x_lower
+			i[0] += y_lower
+			i[1] += x_lower
 		# Calculate optical flow
-		p1, st, err = cv2.calcOpticalFlowPyrLK(im1, im2, p0, None, **LK_PARAMS)
-		print('amount of tracked points are :', len(p1))
+		p1, st, err = cv2.calcOpticalFlowPyrLK(im2, im1, p0, None, **LK_PARAMS)
 		for i in p1:
 			i[0] = round(i[0])
 			i[1] = round(i[1])
-			self.px_planar_ref, self.px_planar_cur = np.squeeze(p0), np.squeeze(p1)
+			self.px_planar_cur, self.px_planar_ref = np.squeeze(p0), np.squeeze(p1)
 
 	def plot_correspondences(self):
+		fig = plt.figure()
 		plt.subplot(2, 1, 1)
 		plt.imshow(self.last_frame)
 		plt.scatter(self.px_planar_ref[:, 0], self.px_planar_ref[:, 1], c='red')
 		plt.subplot(2, 1, 2)
 		plt.imshow(self.new_frame)
 		plt.scatter(self.px_planar_cur[:, 0], self.px_planar_cur[:, 1], c='red')
+		plt.show()
+	def plot_error(self):
+		fig = plt.figure()
+		plt.plot(self.error)
+		plt.grid()
+		plt.xlabel('frame')
+		plt.ylabel('scaling error')
+		plt.title('error y_true - y_est')
 		plt.show()
