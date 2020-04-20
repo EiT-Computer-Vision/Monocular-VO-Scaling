@@ -70,7 +70,7 @@ class VisualOdometry:
 		self.error = []
 		self.focal = cam.fx
 		self.pp = (cam.cx, cam.cy)
-		self.k = np.array([[self.focal, 0, cam.cx], [0, self.focal, cam.cy], [0, 0, 1]])
+		self.k = np.array([[self.focal, 0, self.pp[0]], [0, self.focal, self.pp[1]], [0, 0, 1]])
 		self.trueX, self.trueY, self.trueZ = 0, 0, 0
 		self.detector = cv2.FastFeatureDetector_create(threshold=25, nonmaxSuppression=True)
 		with open(annotations) as f:
@@ -99,7 +99,6 @@ class VisualOdometry:
 	def scale_dynamic(self, points, R):
 		y_mean = np.mean(points[:, 1])
 		scale = -1.65 / y_mean
-		scale = abs(scale)
 		alpha = 0.5
 		rot_trace = abs(np.trace(R.dot(self.cur_R) - self.cur_R))
 		if rot_trace > 5e-3 and self.scale > 0.4:
@@ -170,6 +169,7 @@ class VisualOdometry:
 		E, mask = cv2.findEssentialMat(self.px_cur, self.px_ref, focal=self.focal, pp=self.pp, method=cv2.RANSAC, prob=0.999, threshold=1.0)
 		_, R, t, mask = cv2.recoverPose(E, self.px_cur, self.px_ref, focal=self.focal, pp = self.pp)
 		absolute_scale = self.getAbsoluteScale(frame_id)
+		## initialization ##
 
 
 		## Our functions ##
@@ -182,7 +182,7 @@ class VisualOdometry:
 		print(self.scale)
 		print(absolute_scale)
 		if(self.scale > 0.1):
-			self.cur_t = self.cur_t + (self.scale)*self.cur_R.dot(t)
+			self.cur_t = self.cur_t + self.cur_R.dot(t)
 			self.cur_R = R.dot(self.cur_R)
 			self.cur_t_unscaled = self.cur_t_unscaled + self.cur_R.dot(t)
 		if(self.px_ref.shape[0] < kMinNumFeature):
@@ -203,7 +203,7 @@ class VisualOdometry:
 
 	def track_window(self, im1, im2, x_lower = 275, x_upper = 360, y_lower = 450, y_upper = 780):
 		"""Made as part of EiT computer vision village project"""
-		FEATURE_PARAMS = dict(maxCorners=20, qualityLevel=0.005, minDistance=20, blockSize=7)
+		FEATURE_PARAMS = dict(maxCorners=20, qualityLevel=0.01, minDistance=20, blockSize=7)
 		LK_PARAMS = dict(winSize=(21, 21), maxLevel=3,
 						 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 		crop_img1 = im2[x_lower:x_upper, y_lower:y_upper]
