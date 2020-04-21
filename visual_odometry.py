@@ -1,6 +1,5 @@
 import numpy as np
 import cv2
-from rotations import *
 import matplotlib.pyplot as plt
 STAGE_FIRST_FRAME = 0
 STAGE_SECOND_FRAME = 1
@@ -182,7 +181,7 @@ class VisualOdometry:
 		print(self.scale)
 		print(absolute_scale)
 		if(self.scale > 0.1):
-			self.cur_t = self.cur_t + self.cur_R.dot(t)
+			self.cur_t = self.cur_t + self.scale*self.cur_R.dot(t)
 			self.cur_R = R.dot(self.cur_R)
 			self.cur_t_unscaled = self.cur_t_unscaled + self.cur_R.dot(t)
 		if(self.px_ref.shape[0] < kMinNumFeature):
