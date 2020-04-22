@@ -95,23 +95,6 @@ class VisualOdometry:
 		self.px_planar_ref, self.px_planar_cur = np.reshape(p1, (n,2)), np.reshape(p2, (n,2))
 
 
-	def scale_dynamic(self, points, R):
-		y_mean = np.mean(points[:, 1])
-		scale = -1.65 / y_mean
-		alpha = 0.5
-		rot_trace = abs(np.trace(R.dot(self.cur_R) - self.cur_R))
-		if rot_trace > 5e-3 and self.scale > 0.4:
-			self.scale -= 0.03
-
-		elif (scale > 2 and rot_trace < 5e-3):
-			self.scale = (1 - alpha) * self.scale + 1.3 * alpha
-		if (scale >= self.scale):
-			if (rot_trace < 5e-3):
-					self.scale = (1 - alpha) * self.scale + alpha * min(self.scale + 0.1, scale)
-		else:
-			if (rot_trace < 5e-3):
-				self.scale = (1 - alpha) * self.scale + alpha * max(self.scale - 0.1, scale)
-		self.scale = np.clip(self.scale, 0.1, 3)
 
 	def remove_outliers(self, R, t):
 		self.track_window(self.last_frame, self.new_frame)
@@ -149,6 +132,26 @@ class VisualOdometry:
 		for i in range(len(good_points)):
 			good_pts_ary[i] /= good_pts_ary[i, 3]
 		return good_pts_ary
+
+
+	def scale_dynamic(self, points, R):
+		y_mean = np.mean(points[:, 1])
+		scale = -1.65 / y_mean
+		alpha = 0.5
+		rot_trace = abs(np.trace(R.dot(self.cur_R) - self.cur_R))
+		if rot_trace > 5e-3 and self.scale > 0.4:
+			self.scale -= 0.03
+
+		elif (scale > 2 and rot_trace < 5e-3):
+			self.scale = (1 - alpha) * self.scale + 1.3 * alpha
+		if (scale >= self.scale):
+			if (rot_trace < 5e-3):
+					self.scale = (1 - alpha) * self.scale + alpha * min(self.scale + 0.1, scale)
+		else:
+			if (rot_trace < 5e-3):
+				self.scale = (1 - alpha) * self.scale + alpha * max(self.scale - 0.1, scale)
+		self.scale = np.clip(self.scale, 0.1, 3)
+
 
 	def processFirstFrame(self):
 		self.px_ref = self.detector.detect(self.new_frame)
